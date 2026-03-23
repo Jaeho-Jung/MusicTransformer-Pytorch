@@ -396,10 +396,13 @@ def multi_head_attention_forward_rpr(query,                       # type: Tensor
 
     ######### ADDITION OF RPR ###########
     if(rpr_mat is not None):
+        # 필요한 길이만큼 rpr_mat 자르기
         rpr_mat = _get_valid_embedding(rpr_mat, q.shape[1], k.shape[1])
+        # RPR 임베딩과 쿼리 곱하기
         qe = torch.einsum("hld,md->hlm", q, rpr_mat)
+        # Skewing 연산
         srel = _skew(qe)
-
+        # RPR 임베딩 더하기
         attn_output_weights += srel
 
     if attn_mask is not None:
