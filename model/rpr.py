@@ -81,6 +81,84 @@ class TransformerEncoderLayerRPR(Module):
         src = self.norm2(src)
         return src
 
+# TransformerDecoderRPR
+class TransformerDecoderRPR(Module):
+    """
+    ----------
+    Stacks N TransformerDecoderLayerRPR layers.
+    ----------
+    """
+
+    def __init__(self, decoder_layer, num_layers, norm=None):
+        super(TransformerDecoderRPR, self).__init__()
+        self.layers = _get_clones(decoder_layer, num_layers)
+        self.num_layers = num_layers
+        self.norm = norm
+
+    def forward(self, tgt, memory, tgt_mask=None, memory_mask=None,
+                tgt_key_padding_mask=None, memory_key_padding_mask=None):
+
+        output = tgt
+
+        for i in range(self.num_layers):
+            output = self.layers[i](output, memory, tgt_mask=tgt_mask,
+                                    memory_mask=memory_mask,
+                                    tgt_key_padding_mask=tgt_key_padding_mask,
+                                    memory_key_padding_mask=memory_key_padding_mask)
+
+        if self.norm:
+            output = self.norm(output)
+
+        return output
+
+# TransformerDecoderLayerRPR
+class TransformerDecoderLayerRPR(Module):
+    """
+    ----------
+    Decoder layer with:
+      1. Masked self-attention with RPR
+      2. Cross-attention (standard, no RPR — relative position between encoder
+         and decoder tokens is meaningless)
+      3. Feed-forward network
+    ----------
+    """
+
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, er_len=None):
+        super(TransformerDecoderLayerRPR, self).__init__()
+        # Self-attention with RPR (causal)
+        self.self_attn = MultiheadAttentionRPR(d_model, nhead, dropout=dropout, er_len=er_len)
+        # Cross-attention (standard)
+        self.cross_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        # Feed-forward
+        self.linear1 = Linear(d_model, dim_feedforward)
+        self.dropout = Dropout(dropout)
+        self.linear2 = Linear(dim_feedforward, d_model)
+
+        self.norm1 = LayerNorm(d_model)
+        self.norm2 = LayerNorm(d_model)
+        self.norm3 = LayerNorm(d_model)
+        self.dropout1 = Dropout(dropout)
+        self.dropout2 = Dropout(dropout)
+        self.dropout3 = Dropout(dropout)
+
+    def forward(self, tgt, memory, tgt_mask=None, memory_mask=None,
+                tgt_key_padding_mask=None, memory_key_padding_mask=None):
+        # 1. Masked self-attention (RPR)
+        tgt2 = self.self_attn(tgt, tgt, tgt, attn_mask=tgt_mask,
+                              key_padding_mask=tgt_key_padding_mask)[0]
+        tgt = tgt + self.dropout1(tgt2)
+        tgt = self.norm1(tgt)
+        # 2. Cross-attention (decoder queries → encoder memory)
+        tgt2 = self.cross_attn(tgt, memory, memory, attn_mask=memory_mask,
+                               key_padding_mask=memory_key_padding_mask)[0]
+        tgt = tgt + self.dropout2(tgt2)
+        tgt = self.norm2(tgt)
+        # 3. Feed-forward
+        tgt2 = self.linear2(self.dropout(F.relu(self.linear1(tgt))))
+        tgt = tgt + self.dropout3(tgt2)
+        tgt = self.norm3(tgt)
+        return tgt
+
 # MultiheadAttentionRPR
 class MultiheadAttentionRPR(Module):
     """
