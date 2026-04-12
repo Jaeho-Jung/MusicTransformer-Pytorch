@@ -7,8 +7,12 @@ TORCH_CPU_DEVICE = torch.device("cpu")
 
 if(torch.cuda.device_count() > 0):
     TORCH_CUDA_DEVICE = torch.device("cuda")
+elif(hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+    print("----- Using MPS (Apple Silicon) device -----")
+    print("")
+    TORCH_CUDA_DEVICE = torch.device("mps")
 else:
-    print("----- WARNING: CUDA devices not detected. This will cause the model to run very slow! -----")
+    print("----- WARNING: No GPU detected (CUDA/MPS). Using CPU. -----")
     print("")
     TORCH_CUDA_DEVICE = None
 
