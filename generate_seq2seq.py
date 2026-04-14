@@ -378,11 +378,10 @@ def tokens_to_midi(token_ids, vocab, bpm=215, output_path='generated_solo.mid'):
     beat_duration = 60.0 / bpm  # duration of one beat in seconds
     slot_duration = beat_duration / 16.0  # duration of one 1/64 slot
 
-    current_bar = -1
+    current_bar = 0  # fixed: was -1, causing negative start times
     current_position = 0
     current_velocity = 80
     current_note = None
-    current_duration = 0
 
     for tok_id in token_ids:
         if tok_id >= len(idx2event):
@@ -412,13 +411,15 @@ def tokens_to_midi(token_ids, vocab, bpm=215, output_path='generated_solo.mid'):
                 note_start = bar_start + current_position * slot_duration
                 note_end = note_start + dur_slots * slot_duration
 
-                note = pretty_midi.Note(
-                    velocity=current_velocity,
-                    pitch=current_note,
-                    start=note_start,
-                    end=note_end
-                )
-                instrument.notes.append(note)
+                # Safety: skip notes with negative or zero-length times
+                if note_start >= 0 and note_end > note_start:
+                    note = pretty_midi.Note(
+                        velocity=current_velocity,
+                        pitch=current_note,
+                        start=note_start,
+                        end=note_end
+                    )
+                    instrument.notes.append(note)
                 current_note = None
 
     midi.instruments.append(instrument)
