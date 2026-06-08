@@ -5,3 +5,13 @@
 **.pickle
 **.pyc
 **/__pycache__/*
+
+# Large model weights and training data
+output/
+seq2seq_data/*.npz
+**.pt
+**.pth
+
+# OS and local tooling
+.DS_Store
+andrej-karpathy-skills/
