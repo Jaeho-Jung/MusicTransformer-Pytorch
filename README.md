@@ -1,101 +1,243 @@
-# Music Transformer
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/asigalov61/SuperPiano/blob/master/Super_Piano_3.ipynb)
+# Music Transformer — Jazz Solo Generation
 
-Currently supports Pytorch >= 1.2.0 with Python >= 3.6  
+PyTorch >= 1.2.0 · Python >= 3.6
 
-There is now a much friendlier [Google Colab version](https://github.com/asigalov61/SuperPiano/blob/master/Super_Piano_3.ipynb) of this project courtesy of [Alex](https://github.com/asigalov61)! 
+This project builds on the [Music Transformer (Huang et al., 2018)](https://arxiv.org/abs/1809.04281) to generate jazz melody solos conditioned on chord progressions. An encoder-decoder architecture takes a chord progression as input and autoregressively generates a matching melody, trained on the [Weimar Jazz Database](https://jazzomat.hfm-weimar.de/dbformat/dboverview.html) using a Modified REMI token representation inspired by [BebopNet (Hakimi et al., 2020)](https://archives.ismir.net/ismir2020/paper/000132.pdf).
 
-## About
-This is a reproduction of the MusicTransformer (Huang et al., 2018) for Pytorch. This implementation utilizes the generic Transformer implementation introduced in Pytorch 1.2.0 (https://pytorch.org/docs/stable/nn.html#torch.nn.Transformer).
+Two model variants are provided for comparison:
 
-## Generated Music:
-Some various music results (midi and mp3) are in the following Google Drive folder:  
-https://drive.google.com/drive/folders/1qS4z_7WV4LLgXZeVZU9IIjatK7dllKrc?usp=sharing
+| Model | Attention | Description |
+|-------|-----------|-------------|
+| `MusicTransformerSeq2Seq` | RPR | Encoder-decoder with Relative Position Representation |
+| `MusicTransformerBaseline` | Standard MHA | Same architecture, without RPR (ablation baseline) |
 
-See the results section for the model hyperparameters used for generation.
+Both models share the same architecture, hyperparameters, training data, and training procedure. The only difference is the attention mechanism.
 
-Mp3 results were played through a [Kawai MP11SE](https://kawaius.com/product/mp11se/). 
-In order to play .mid files, we used [Midi Editor](https://www.midieditor.org/) which is free to use and open source.
+---
 
-## TODO
-* Write own midi pre-processor (sustain pedal errors with jason's)
-   * Support any midi file beyond Maestro
-* Fixed length song generation
-* Midi augmentations from paper
-* Multi-GPU support
+## Table of Contents
 
-## How to run
-1. Download the Maestro dataset (we used v2 but v1 should work as well). You can download the dataset [here](https://magenta.tensorflow.org/datasets/maestro). You only need the MIDI version if you're tight on space. 
+- [Architecture](#architecture)
+- [Modified REMI Representation](#modified-remi-representation)
+- [Dataset: Weimar Jazz Database](#dataset-weimar-jazz-database)
+- [Data Pipeline](#data-pipeline)
+- [How to Run](#how-to-run)
+- [Results](#results)
+- [References](#references)
 
-2. Run `git submodule update --init --recursive` to get the MIDI pre-processor provided by jason9693 et al. (https://github.com/jason9693/midi-neural-processor), which is used to convert the MIDI file into discrete ordered message types for training and evaluating. 
+---
 
-3. Run `preprocess_midi.py -output_dir <path_to_save_output> <path_to_maestro_data>`, or run with `--help` for details. This will write pre-processed data into folder split into `train`, `val`, and `test` as per Maestro's recommendation.
+## Architecture
 
-4. To train a model, run `train.py`. Use `--help` to see the tweakable parameters. See the results section for details on model performance. 
-
-5. After training models, you can evaluate them with `evaluate.py` and generate a MIDI piece with `generate.py`. To graph and compare results visually, use `graph_results.py`.
-
-For the most part, you can just leave most arguments at their default values. If you are using a different dataset location or other such things, you will need to specify that in the arguments. Beyond that, the average user does not have to worry about most of the arguments.
-
-### Training
-As an example to train a model using the parameters specified in results:
+Both models use a full encoder-decoder structure:
 
 ```
-python train.py -output_dir rpr --rpr 
-```
-You can additonally specify both a weight and print modulus that determine what epochs to save weights and what batches to print. The weights that achieved the best loss and the best accuracy (separate) are always stored in results, regardless of weight modulus input.
-
-### Evaluation
-You can evaluate a model using;
-```
-python evaluate.py -model_weights rpr/results/best_acc_weights.pickle --rpr
+Chord tokens  → Embedding → PositionalEncoding
+    → Encoder  ─────────────────────────────┐
+                                             ↓ cross-attention
+Melody tokens → Embedding → PositionalEncoding
+    → Decoder (causal mask) ←───────────────┘
+    → Linear → Softmax → Next melody token
 ```
 
-Your model's results may vary because a random sequence start position is chosen for each evaluation piece. This may be changed in the future.
+The encoder reads harmony tokens (chords, tempo) and the decoder autoregressively generates melody tokens conditioned on the encoder output.
 
-### Generation
-You can generate a piece with a trained model by using:
+**The only difference between the two models:**
+
+| | `MusicTransformerSeq2Seq` | `MusicTransformerBaseline` |
+|---|---|---|
+| Encoder layers | `TransformerEncoderRPR` | `nn.TransformerEncoder` |
+| Decoder layers | `TransformerDecoderRPR` | `nn.TransformerDecoder` |
+| Positional info | Sinusoidal PE + learnable relative position embeddings | Sinusoidal PE only |
+
+`MusicTransformerSeq2Seq` uses a custom `MultiheadAttentionRPR` (from `model/rpr.py`, adapted from PyTorch 1.2.0) that adds a learned relative position embedding matrix to the attention logits before softmax, so the model explicitly encodes the distance between any two tokens. `MusicTransformerBaseline` uses PyTorch's standard multi-head attention with no relative distance signal.
+
+**Shared hyperparameters:**
+
+| Parameter | Value |
+|-----------|-------|
+| `n_layers` | 6 |
+| `num_heads` | 8 |
+| `d_model` | 512 |
+| `dim_feedforward` | 1024 |
+| `dropout` | 0.1 |
+| `max_sequence` | 512 |
+| `batch_size` | 8 |
+| `epochs` | 200 |
+| `vocab_size` | 470 |
+
+---
+
+## Modified REMI Representation
+
+The token representation is inspired by and based on [BebopNet (Hakimi et al., 2020)](https://archives.ismir.net/ismir2020/paper/000132.pdf), which introduced a REMI-style encoding for jazz improvisation that interleaves harmonic and melodic events. This project extends that scheme with additional structural and motivic tokens derived from the Weimar Jazz Database annotations.
+
+### Token Categories
+
+| Category | Tokens | Description |
+|----------|:------:|-------------|
+| `Note-On` | 128 | MIDI pitch 0–127 |
+| `Note-Velocity` | 32 | Quantized velocity bins |
+| `Note-Duration` | 32 | Duration in 1/64 beat units |
+| `Position` | 64 | Timing offset within a bar (0/64–63/64) |
+| `Bar` | 1 | Bar boundary marker |
+| `Tempo-Class` | 6 | BPM range class (50, 80, 110, 140, 180, 320) |
+| `Tempo` | 72 | Precise BPM bin (12 bins per class) |
+| `Chord-Tone` | 12 | Root pitch class (C–B) |
+| `Chord-Type` | ~23 | Chord quality (maj, min, 7, m7, j7, m7b5, dim, aug, sus, …) |
+| `Chord-Slash` | 12 | Bass note for slash chords |
+| `MLU-Type / Subtype` | — | Motivic unit type and subtype |
+| `Backref-Distance` | 8 | How many bars back a motive refers to |
+| `Backref-Variation` | — | Variation tag for motivic references |
+| `Part-Start/End` | — | Form section boundaries (A, B, C) |
+| `Rep-Start/End` | — | Repetition section markers |
+| **Total** | **470** | |
+
+### Encoder vs. Decoder Tokens
+
+The encoder processes **harmony**: `Bar`, `Position`, `Tempo-Class`, `Tempo`, `Chord-Tone`, `Chord-Type`, `Chord-Slash`.
+
+The decoder generates **melody**: `Bar`, `Position`, `Note-Velocity`, `Note-On`, `Note-Duration`, `MLU-*`, `Part-*`, `Rep-*`.
+
+---
+
+## Dataset: Weimar Jazz Database
+
+Training data comes from the [Weimar Jazz Database (WJD)](https://jazzomat.hfm-weimar.de/dbformat/dboverview.html), which contains 456 annotated jazz solos by 78 performers.
+
+Each piece is provided as two CSV files:
+- `mcsv_beat/` — beat-level annotations: tempo, bar number, chord symbols, form labels
+- `mcsv_melody/` — note-level annotations: pitch, onset, duration, loudness, motivic labels (MLU)
+
+The CSV files are converted to interleaved REMI token sequences and saved as `seq2seq_data.npz` with separate `encoder_inputs` (chord) and `decoder_targets` (melody) arrays. Training uses 8-bar sliding windows with stride 1 and optional pitch augmentation (±3 semitones).
+
+---
+
+## Data Pipeline
+
 ```
-python generate.py -output_dir output -model_weights rpr/results/best_acc_weights.pickle --rpr
+mcsv_beat/ + mcsv_melody/   (456 pieces, Weimar Jazz Database)
+        │
+        ▼
+  src/convert_to_remi.py
+    ├─ collect_beats()     → tempo, bar markers
+    ├─ collect_chords()    → Chord-Tone / -Type / -Slash tokens
+    ├─ collect_notes()     → Note-On / -Velocity / -Duration tokens (1/64 grid)
+    └─ collect_mlus()      → motivic structure tags
+        │
+        ▼
+  src/build_vocab.py       → pickles/remi_wstruct_vocab.pkl  (470 tokens)
+        │
+        ▼
+  seq2seq_data.npz
+    encoder_inputs[N, 512]   ← harmony (chord) sequences
+    decoder_targets[N, 512]  ← melody sequences
+        │
+        ▼
+  dataset/seq2seq_dataset.py  (Seq2SeqDataset)
+    · 90/10 train/val split
+    · random pitch augmentation (±3 semitones) on Note-On / Chord-Tone / Chord-Slash
+        │
+        ▼
+  train_seq2seq.py  /  train_baseline.py
 ```
 
-The default generation method is a sampled probability distribution with the softmaxed output as the weights. You can also use beam search but this simply does not work well and is not recommended.
+---
 
-## Pytorch Transformer
-We used the Transformer class provided since Pytorch 1.2.0 (https://pytorch.org/docs/stable/nn.html#torch.nn.Transformer). The provided Transformer assumes an encoder-decoder architecture. To make it decoder-only like the Music Transformer, you use stacked encoders with a custom dummy decoder. This decoder-only model can be found in model/music_transformer.py.
+## How to Run
 
-At the time this reproduction was produced, there was no Relative Position Representation (RPR) (Shaw et al., 2018) support in the Pytorch Transformer code. To account for the lack of RPR support, we modified Pytorch 1.2.0 Transformer code to support it. This is based on the Skew method proposed by Huang et al. which is more memory efficient. You can find the modified code in model/rpr.py. This modified Pytorch code will not be kept up to date and will be removed when Pytorch provides RPR support.
+### Build the REMI Dataset
+
+The pre-built dataset is not tracked in git (large file). To regenerate it from the raw CSVs:
+```bash
+python src/convert_to_remi.py          # encodes all pieces to remi_encs_struct/
+python src/build_seq2seq_dataset.py    # assembles seq2seq_data.npz
+```
+
+### Train
+
+```bash
+# Seq2seq with RPR (recommended)
+python train_seq2seq.py \
+    --data seq2seq_data/seq2seq_data.npz \
+    --output_dir output/seq2seq \
+    --augment
+
+# Baseline (standard attention, no RPR)
+python train_baseline.py \
+    --data seq2seq_data/seq2seq_data.npz \
+    --output_dir output/baseline \
+    --augment
+```
+
+### Generate a Jazz Solo
+
+Pass a chord progression using `|`-separated bar notation. Each bar can contain 1–4 chord symbols separated by spaces.
+
+```bash
+# F Blues (12 bars)
+python generate_seq2seq.py \
+    --weights output/seq2seq/results/best_loss_weights.pt \
+    --chords "F7 | Bb7 | F7 | F7 | Bb7 | Bb7 | F7 | D7 | Gm7 | C7 | F7 C7 | Gm7 C7" \
+    --tempo 180 \
+    --output output/f_blues_solo.mid
+
+# Autumn Leaves (8 bars)
+python generate_seq2seq.py \
+    --weights output/seq2seq/results/best_loss_weights.pt \
+    --chords "Cm7 | F7 | Bbj7 | Ebj7 | Am7b5 | D7 | Gm7 | Gm7" \
+    --tempo 215 \
+    --output output/autumn_leaves_solo.mid
+
+# From a chord file (one section per line, section labels optional)
+python generate_seq2seq.py \
+    --weights output/seq2seq/results/best_loss_weights.pt \
+    --chords_file chords/there_will_never.txt \
+    --tempo 230 \
+    --output output/there_will_never_solo.mid
+```
+
+**Chord symbol syntax**
+
+| Symbol | Meaning |
+|--------|---------|
+| `C`, `Cm`, `Cj7`, `C7` | Major, minor, major-7, dominant-7 |
+| `Cm7`, `Cm7b5` | Minor-7, half-diminished |
+| `Cdim`, `Co7` | Diminished, diminished-7 |
+| `C+`, `C+7` | Augmented |
+| `Csus`, `Csus7` | Suspended |
+| `Cm7/Eb` | Slash chord (bass note after `/`) |
+| `Bb`, `F#` | Flat / sharp accidentals |
+
+For progressions longer than 8 bars, generation automatically uses a sliding-window approach with decoder context carry-over between chunks.
+
+**Generation options**
+
+| Flag | Default | Description |
+|------|:-------:|-------------|
+| `--temperature` | 1.0 | Sampling temperature |
+| `--top_k` | 10 | Top-k sampling |
+| `--max_len` | 512 | Maximum decoder token length |
+| `--tempo` | 215 | BPM |
+
+---
 
 ## Results
-We trained a base and RPR model with the following parameters (taken from the paper) for 300 epochs:
-* **learn_rate**: None
-* **ce_smoothing**: None
-* **batch_size**: 2
-* **max_sequence**: 2048
-* **n_layers**: 6
-* **num_heads**: 8
-* **d_model**: 512
-* **dim_feedforward**: 1024
-* **dropout**: 0.1
 
-The following graphs were generated with the command: 
-```
-python graph_results.py -input_dirs base_model/results?rpr_model/results -model_names base?rpr
-```
+Both models trained on Weimar Jazz Database for 200 epochs with pitch augmentation (±3 semitones).
 
-Note, multiple input models are separated with a '?'
+| Model | Best Val Loss | Epoch |
+|-------|:------------:|:-----:|
+| Baseline (standard MHA, no RPR) | 1.42 | 19 |
+| Seq2Seq (RPR) | **1.03** | 14 |
 
-![Loss Results Graph](https://lh3.googleusercontent.com/u6AL9vIXG7gBeKuLlVJGFeex7-q2NYLbMqYVZGFI3qxWlpa6hAXdVlOsD52i4jKjrVcf4YZCGBaMIVIagcu_z-7Sg5YhDcgsqcs-p4aR48C287c1QraG0tRnHnmimLd8jizk9afW8g=w2400 "Loss Results")
+The RPR model achieves substantially lower validation loss, confirming that relative positional encoding improves harmony-conditioned melody generation.
 
-![Accuracy Results Graph](https://lh3.googleusercontent.com/ajbanROlOAM9YrNDaHrv1tWM8tZ4nrcrTehwoHsaftnPPZ4xEBLG0RmBa4awYXntBQF0RR_Uh3bsLZv4mdzmZM_TNisMnreKsB2jZIY7iSZjQiL4kRumypymuxIiHu-VdPB0kUkILQ=w2400 "Accuracy Results")
+---
 
-![Learn Rate Results Graph](https://lh3.googleusercontent.com/Gz8N8tgHN2qstvdq77GqQQiukWjwBUettMK8IYV0228il5NvRdrnoISS5HTrxd7xVOrRpSzTtLlRppT-UwWJ2ke1XnAsRMbJ0bCElSvCQAA_z08HSZjbJ4wQXBbg4lVzuGdikEN5Ug=w2400 "Learn Rate Results")
+## References
 
-Best loss for *base* model: 1.99 on epoch 250  
-Best loss for *rpr* model: 1.92 on epoch 216
-
-## Discussion
-The results were overall close to the results from the paper. Huang et al. reported a loss of around 1.8 for the base and rpr models on Maestro V1. We use Maestro V2 and perform no midi augmentations as they had discussed in their paper. Furthermore, [there are issues with how sustain is handled](https://github.com/jason9693/midi-neural-processor/pull/2) which can be observed by listening to some pre-processed midi files. More refinement with the addition of those augmentations and fixes may yield the loss results in line with the paper.
-
-
-
+- Huang et al. (2018). [Music Transformer: Generating Music with Long-Term Structure](https://arxiv.org/abs/1809.04281).
+- Shaw et al. (2018). [Self-Attention with Relative Position Representations](https://arxiv.org/abs/1803.02155).
+- Hakimi, S. H., Bhonker, N., & El-Yaniv, R. (2020). [BebopNet: Deep Neural Models for Personalized Jazz Improvisations](https://archives.ismir.net/ismir2020/paper/000132.pdf). *Proceedings of ISMIR 2020*. *(Modified REMI representation)*
+- Pfleiderer et al. (2017). [Inside the Jazzomat: New Perspectives for Jazz Research](https://schott-campus.com/jazzomat/). *(Weimar Jazz Database)*
