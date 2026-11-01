@@ -1,17 +1,17 @@
-# Music Transformer — Jazz Solo Generation
+# Music Transformer for jazz solo generation
 
 PyTorch >= 1.2.0 · Python >= 3.6
 
-This project builds on the [Music Transformer (Huang et al., 2018)](https://arxiv.org/abs/1809.04281) to generate jazz melody solos conditioned on chord progressions. An encoder-decoder architecture takes a chord progression as input and autoregressively generates a matching melody, trained on the [Weimar Jazz Database](https://jazzomat.hfm-weimar.de/dbformat/dboverview.html) using a Modified REMI token representation inspired by [BebopNet (Hakimi et al., 2020)](https://archives.ismir.net/ismir2020/paper/000132.pdf).
+The encoder reads a chord progression; the decoder generates melody tokens one at a time. The training pipeline uses the [Weimar Jazz Database](https://jazzomat.hfm-weimar.de/dbformat/dboverview.html) and a Modified REMI representation inspired by [BebopNet (Hakimi et al., 2020)](https://archives.ismir.net/ismir2020/paper/000132.pdf). The relative-attention model draws on [Music Transformer (Huang et al., 2018)](https://arxiv.org/abs/1809.04281).
 
-Two model variants are provided for comparison:
+The repository has two model variants:
 
 | Model | Attention | Description |
 |-------|-----------|-------------|
 | `MusicTransformerSeq2Seq` | RPR | Encoder-decoder with Relative Position Representation |
 | `MusicTransformerBaseline` | Standard MHA | Same architecture, without RPR (ablation baseline) |
 
-The training scripts expose matching default hyperparameters and use the same dataset class. The attention implementation differs; this repository alone does not establish that all reported runs used identical settings or random seeds.
+Both training scripts use the same dataset class and expose matching default hyperparameters. The saved run settings and random seeds for the reported losses are unavailable.
 
 ---
 
@@ -42,7 +42,7 @@ Melody tokens → Embedding → PositionalEncoding
 
 The encoder reads harmony tokens (chords, tempo) and the decoder autoregressively generates melody tokens conditioned on the encoder output.
 
-**The only difference between the two models:**
+The implementations differ in attention:
 
 | | `MusicTransformerSeq2Seq` | `MusicTransformerBaseline` |
 |---|---|---|
@@ -224,14 +224,14 @@ For progressions longer than 8 bars, generation automatically uses a sliding-win
 
 ## Results
 
-The table below records reported best validation losses. The training scripts allow up to 200 epochs and optional pitch augmentation (±3 semitones); the run logs and exact settings supporting these values are not included here. The dataset class splits sequence pairs at random, so overlapping windows from one solo may appear in both training and validation sets.
+These best validation losses were recorded for the two variants. The training scripts allow up to 200 epochs and optional pitch augmentation (±3 semitones), but the run logs and exact settings for these numbers are unavailable. The dataset splits sequence pairs at random. Overlapping windows from one solo can therefore enter both training and validation sets.
 
 | Model | Best Val Loss | Epoch |
 |-------|:------------:|:-----:|
 | Baseline (standard MHA, no RPR) | 1.42 | 19 |
 | Seq2Seq (RPR) | **1.03** | 14 |
 
-In the reported runs, the RPR model had a lower best validation loss. This is not sufficient to establish a general improvement in harmony-conditioned melody generation. A solo-level split, saved run configurations, repeated seeds, and listening or music-structure evaluation are needed for a stronger conclusion.
+The RPR run recorded a lower best validation loss. To test whether that difference holds for unseen solos, split by solo before creating windows and repeat training with saved settings and multiple seeds. Listening tests or music-structure evaluation would address generated melody quality.
 
 ---
 
