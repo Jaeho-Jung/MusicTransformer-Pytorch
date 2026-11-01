@@ -11,7 +11,7 @@ Two model variants are provided for comparison:
 | `MusicTransformerSeq2Seq` | RPR | Encoder-decoder with Relative Position Representation |
 | `MusicTransformerBaseline` | Standard MHA | Same architecture, without RPR (ablation baseline) |
 
-Both models share the same architecture, hyperparameters, training data, and training procedure. The only difference is the attention mechanism.
+The training scripts expose matching default hyperparameters and use the same dataset class. The attention implementation differs; this repository alone does not establish that all reported runs used identical settings or random seeds.
 
 ---
 
@@ -135,7 +135,7 @@ mcsv_beat/ + mcsv_melody/   (456 pieces, Weimar Jazz Database)
         │
         ▼
   dataset/seq2seq_dataset.py  (Seq2SeqDataset)
-    · 90/10 train/val split
+    · seeded 90/10 split of sequence pairs (not a solo-level split)
     · random pitch augmentation (±3 semitones) on Note-On / Chord-Tone / Chord-Slash
         │
         ▼
@@ -224,14 +224,14 @@ For progressions longer than 8 bars, generation automatically uses a sliding-win
 
 ## Results
 
-Both models trained on Weimar Jazz Database for 200 epochs with pitch augmentation (±3 semitones).
+The table below records reported best validation losses. The training scripts allow up to 200 epochs and optional pitch augmentation (±3 semitones); the run logs and exact settings supporting these values are not included here. The dataset class splits sequence pairs at random, so overlapping windows from one solo may appear in both training and validation sets.
 
 | Model | Best Val Loss | Epoch |
 |-------|:------------:|:-----:|
 | Baseline (standard MHA, no RPR) | 1.42 | 19 |
 | Seq2Seq (RPR) | **1.03** | 14 |
 
-The RPR model achieves substantially lower validation loss, confirming that relative positional encoding improves harmony-conditioned melody generation.
+In the reported runs, the RPR model had a lower best validation loss. This is not sufficient to establish a general improvement in harmony-conditioned melody generation. A solo-level split, saved run configurations, repeated seeds, and listening or music-structure evaluation are needed for a stronger conclusion.
 
 ---
 
